@@ -28,6 +28,7 @@ pillow==13.0.0
 pluggy==1.7.0
 psycopg==3.3.8
 psycopg-binary==3.3.8
+psycopg-pool==3.3.3
 pydantic==2.14.3
 pydantic_core==2.50.4
 Pygments==2.21.0

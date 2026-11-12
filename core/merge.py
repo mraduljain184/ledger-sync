@@ -1,7 +1,6 @@
 import hashlib
 import json
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
 from core.events import CREATE, EDIT_AMOUNT, EDIT_NOTE, DELETE
 
 
@@ -26,6 +25,8 @@ class Conflict:
 class State:
     entries: dict
     conflicts: list
+    amount_winner: dict = field(default_factory=dict)
+    last: dict = field(default_factory=dict)
 
 
 def build_state(events):
@@ -61,7 +62,7 @@ def build_state(events):
                 entry.note = e.note
         last[e.entry] = e.id
 
-    return State(entries, conflicts)
+    return State(entries, conflicts, amount_winner, last)
 
 
 def balance(state, party):
