@@ -17,8 +17,10 @@ services:
 
   api:
     build: .
+    command: ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
     environment:
       DATABASE_URL: postgresql://ledger:ledger@db:5432/ledger
+      DB_POOL_MAX: "20"
     ports:
       - "8000:8000"
     depends_on:
