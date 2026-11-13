@@ -1,4 +1,4 @@
 The oracle uses the same merge function as the server. So the simulator validates delivery (loss, duplication, reordering, skew), while the merge rules themselves are validated by the property tests. Say this in the paper.
 The “15% dropped and retried” is split into 7.5% lost requests and 7.5% lost responses, plus a 50% chance that a lost response leads to resending under a new batch id.
 “Share of entries edited concurrently” is implemented as the probability that an edit targets an entry created by another phone. The conflict rate we report is the measured outcome of that setting.
-Section VI-B scale: write the merchants and seeds you actually ran.
+Section VI-B scale: write the merchants and seeds you actually ran.M
