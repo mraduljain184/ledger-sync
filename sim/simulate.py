@@ -3,7 +3,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 
-from core.merge import balance, build_state, digest
+from core.merge import balance, build_state, digest, entries_digest
 from sim.device import Device
 
 PARTIES = ["ramesh", "sita", "kumar", "meena", "gopal", "anil"]
@@ -21,16 +21,17 @@ class Config:
     mean_online: float = 60
     sync_every: int = 5
     batch_size: int = 50
+    hybrid: bool = True       # phones use hybrid logical clocks (False = plain wall clock)
 
 
 @dataclass
 class Faults:
-    p_req_lost: float = 0.075    # request never reaches the server
-    p_resp_lost: float = 0.075   # server processed it, but the phone never hears back
-    p_dup: float = 0.10          # network delivers the request twice
-    p_rebatch: float = 0.5       # after a lost response, app resends under a NEW batch id
+    p_req_lost: float = 0.075
+    p_resp_lost: float = 0.075
+    p_dup: float = 0.10
+    p_rebatch: float = 0.5
     reorder: bool = True
-    max_skew_ms: int = 300_000   # +/- 5 minutes of clock error per phone
+    max_skew_ms: int = 300_000
 
 
 def act(dev, rng, cfg, creator):
@@ -62,7 +63,7 @@ def sync_device(dev, backend, faults, rng, stats, batch_size):
         stats["attempts"] += 1
         if rng.random() < faults.p_req_lost:
             stats["lost_requests"] += 1
-            continue                                  # retry later, same batch id
+            continue
         backend.push(dev.merchant, dev.name, bid, events)
         if rng.random() < faults.p_dup:
             stats["dup_deliveries"] += 1
@@ -70,7 +71,7 @@ def sync_device(dev, backend, faults, rng, stats, batch_size):
         if rng.random() < faults.p_resp_lost:
             stats["lost_responses"] += 1
             if rng.random() < faults.p_rebatch:
-                dev.unsent = dev.pending.pop(bid) + dev.unsent   # will get a new batch id
+                dev.unsent = dev.pending.pop(bid) + dev.unsent
                 stats["rebatched"] += 1
             continue
         del dev.pending[bid]
@@ -85,12 +86,13 @@ def sync_device(dev, backend, faults, rng, stats, batch_size):
 
 
 def fetch_all(backend, merchant):
-    ids, since = set(), 0
+    ids, rows, since = set(), 0, 0
     while True:
         events, since, more = backend.pull(merchant, since)
+        rows += len(events)
         ids |= {e.id for e in events}
         if not more:
-            return ids
+            return ids, rows
 
 
 def run_merchant(backend, merchant, cfg, faults, seed):
@@ -99,7 +101,7 @@ def run_merchant(backend, merchant, cfg, faults, seed):
     devs = []
     for i in range(cfg.devices):
         skew = rng.randint(-faults.max_skew_ms, faults.max_skew_ms)
-        devs.append(Device(merchant, f"{merchant}-d{i}", (lambda s=skew: now[0] + s), rng))
+        devs.append(Device(merchant, f"{merchant}-d{i}", (lambda s=skew: now[0] + s), rng, cfg.hybrid))
 
     creator, created, stats = {}, {}, Counter()
     t0 = time.perf_counter()
@@ -111,13 +113,12 @@ def run_merchant(backend, merchant, cfg, faults, seed):
                 dev.online = False
             elif not dev.online and rng.random() < 1 / cfg.mean_offline:
                 dev.online = True
-            if rng.random() < cfg.p_act:               # recording works offline
+            if rng.random() < cfg.p_act:
                 e = act(dev, rng, cfg, creator)
                 created[e.id] = e
             if dev.online and (tick + i) % cfg.sync_every == 0:
                 sync_device(dev, backend, faults, rng, stats, cfg.batch_size)
 
-    # network heals: everyone online, no faults, a few clean rounds
     clean = Faults(0, 0, 0, 0, False, 0)
     for _ in range(3):
         for dev in devs:
@@ -127,16 +128,18 @@ def run_merchant(backend, merchant, cfg, faults, seed):
     # ---- the oracle ----
     oracle = build_state(created.values())
     want = digest(oracle)
+    want_entries = entries_digest(oracle)
     server = backend.state(merchant)
-    server_ids = fetch_all(backend, merchant)
+    server_ids, server_rows = fetch_all(backend, merchant)
     parties = sorted({x.party for x in oracle.entries.values()})
     want_balances = {p: balance(oracle, p) for p in parties}
 
-    lost = len(set(created) - server_ids)            # I1: no accepted event lost
-    extra = len(server_ids - set(created))           # I2: nothing applied twice / invented
-    converged = (server["digest"] == want and         # I3: every replica equals the oracle
-                 all(digest(d.state()) == want for d in devs))
-    balances_ok = server["balances"] == want_balances   # I4: balances equal the oracle's
+    lost = len(set(created) - server_ids)                        # I1: nothing lost
+    dup_rows = server_rows - len(server_ids)                     # repeated rows stored
+    extra = len(server_ids - set(created)) + dup_rows            # I2: nothing doubled or invented
+    state_ok = server["entries_digest"] == want_entries          # I3: server state equals the oracle
+    devices_ok = all(digest(d.state()) == want for d in devs)    # every phone equals the oracle
+    balances_ok = server["balances"] == want_balances            # I4: balances equal the oracle's
 
     n = len(created)
     return {
@@ -144,11 +147,17 @@ def run_merchant(backend, merchant, cfg, faults, seed):
         "server_events": server["events"],
         "lost": lost,
         "extra": extra,
-        "converged": converged,
+        "dup_rows": dup_rows,
+        "state_ok": state_ok,
+        "devices_ok": devices_ok,
+        "converged": state_ok and devices_ok,
         "balances_ok": balances_ok,
-        "ok": lost == 0 and extra == 0 and converged and balances_ok,
+        "ok": lost == 0 and extra == 0 and state_ok and devices_ok and balances_ok,
         "conflicts": len(oracle.conflicts),
+        "conflicts_flagged": server["conflicts"],
         "conflict_rate": round(100 * len(oracle.conflicts) / n, 3) if n else 0.0,
+        "inversions": sum(d.inversions for d in devs),
+        "based_edits": sum(d.based_edits for d in devs),
         "attempts": stats["attempts"],
         "lost_requests": stats["lost_requests"],
         "lost_responses": stats["lost_responses"],

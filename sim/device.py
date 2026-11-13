@@ -10,16 +10,18 @@ def new_uuid(rng):
 
 
 class Device:
-    def __init__(self, merchant, name, now_fn, rng):
+    def __init__(self, merchant, name, now_fn, rng, hybrid=True):
         self.merchant = merchant
         self.name = name
-        self.clock = Clock(name, now_fn)
+        self.clock = Clock(name, now_fn, hybrid)
         self.rng = rng
-        self.log = {}        # event id -> Event: everything this phone knows
-        self.unsent = []     # created here, not yet in a batch
-        self.pending = {}    # batch id -> events, sent but not yet acknowledged
+        self.log = {}
+        self.unsent = []
+        self.pending = {}
         self.cursor = 0
         self.online = True
+        self.inversions = 0     # edits stamped earlier than the event they were based on
+        self.based_edits = 0    # edits that were based on an earlier event
         self._state = None
 
     def state(self):
@@ -29,6 +31,11 @@ class Device:
 
     def _emit(self, **kw):
         e = Event(id=new_uuid(self.rng), device=self.name, hlc=self.clock.tick(), **kw)
+        if e.base is not None:
+            self.based_edits += 1
+            prev = self.log.get(e.base)
+            if prev is not None and not e.hlc > prev.hlc:
+                self.inversions += 1
         self.log[e.id] = e
         self.unsent.append(e)
         self._state = None

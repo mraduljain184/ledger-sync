@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from core.events import Event
 from core.hlc import HLC
-from core.merge import balance, build_state, digest
+from core.merge import balance, build_state, digest, entries_digest
 from server import db
 
 MAX_DRIFT_MS = 24 * 60 * 60 * 1000   # events from more than a day in the future are suspect
@@ -150,6 +150,7 @@ def state(merchant: str):
     return {
         "events": len(events),
         "digest": digest(st),
+        "entries_digest": entries_digest(st),
         "balances": {p: balance(st, p) for p in parties},
         "conflicts": len(st.conflicts),
     }

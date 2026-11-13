@@ -75,3 +75,12 @@ def digest(state):
             for x in sorted(state.entries.values(), key=lambda x: x.id)]
     cons = sorted((c.entry, c.kind, c.earlier, c.later) for c in state.conflicts)
     return hashlib.sha256(json.dumps([rows, cons]).encode()).hexdigest()
+
+def digest_rows(rows):
+    return hashlib.sha256(json.dumps(sorted(rows)).encode()).hexdigest()
+
+
+def entries_digest(state):
+    """Hash of the ledger entries only, ignoring conflict flags."""
+    return digest_rows([(x.id, x.party, x.amount, x.note, x.deleted)
+                        for x in state.entries.values()])
